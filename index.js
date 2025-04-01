@@ -3,13 +3,13 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === CONFIGURATION ===
-const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/...' // (your real webhook here)
-const API_KEY = 'your_twelvedata_api_key';
-const WATCHLIST = ['BBAI', 'IONQ', 'SOFI', 'MVIS', 'RIVN'];
+// CONFIGURATION
+const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK';
+const API_KEY = '81ccfc8574164c00b822939c3f885f4a';
+const WATCHLIST = ['BBAI', 'IONQ', 'GCT', 'TSLA', 'NVDA'];
 const SCAN_WINDOW = { start: '09:15', end: '10:30' };
 
-// === UTILITY FUNCTIONS ===
+// UTILITIES
 function isInScanWindow() {
   const now = new Date();
   const currentHour = now.getHours().toString().padStart(2, '0');
@@ -19,7 +19,7 @@ function isInScanWindow() {
 }
 
 async function fetchQuote(ticker) {
-  const url = `https://api.twelvedata.com/quote?symbol=${ticker}&apikey=${API_KEY}`;
+  const url = `https://api.twelvedata.com/price?symbol=${ticker}&apikey=${API_KEY}`;
   try {
     const response = await axios.get(url);
     return response.data;
@@ -28,32 +28,8 @@ async function fetchQuote(ticker) {
   }
 }
 
-async function scanWatchlist() {
-  if (!isInScanWindow()) {
-    console.log("Not in scan window. Skipping...");
-    return;
-  }
+async function scanStocks() {
+  const results = [];
 
   for (const ticker of WATCHLIST) {
-    const data = await fetchQuote(ticker);
-    if (data && parseFloat(data.percent_change) >= 5) {
-      await axios.post(DISCORD_WEBHOOK_URL, {
-        content: `**ALW-X Alert:** ${ticker} is up ${data.percent_change}%! Current price: $${data.close}`
-      });
-      console.log(`Alert sent for ${ticker}`);
-    }
-  }
-}
-
-// === ROUTES ===
-app.get("/", (req, res) => {
-  res.send("ALW-X Engine is online.");
-});
-
-app.get("/test", (req, res) => {
-  res.send("ALW-X Engine is live!");
-});
-
-app.listen(PORT, () => {
-  console.log(`ALW-X server running on port ${PORT}`);
-});
+    const quote = await
