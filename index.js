@@ -11,6 +11,13 @@ const MAX_PRICE = 30;
 const MIN_VOLUME = 100000;
 const CONFIDENCE_THRESHOLD = 65;
 
+// === Tracking Variables for Status Monitoring ===
+let lastScanTime = null;
+let tickersScanned = [];
+let tickersPassed = [];
+let apiCallsUsed = 0;
+let alertsFired = 0;
+
 // === Helper: Get dynamic stock list from Finviz Gainers page ===
 async function fetchTopStocksFromFinviz() {
   try {
@@ -102,10 +109,20 @@ async function scanMarket() {
   const min = now.getMinutes();
   if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) return;
 
+  lastScanTime = now.toLocaleTimeString();
+  tickersScanned = [];
+  tickersPassed = [];
+  apiCallsUsed = 0;
+  alertsFired = 0;
+
   const tickers = await fetchTopStocksFromFinviz();
 
   for (const symbol of tickers) {
+    tickersScanned.push(symbol);
+
     const candles = await fetchCandles(symbol);
+    apiCallsUsed += 1;
+
     if (candles.length < 6) continue;
 
     const latest = candles[candles.length - 1];
@@ -113,6 +130,7 @@ async function scanMarket() {
     const volume = parseFloat(latest.volume);
 
     if (price < MIN_PRICE || price > MAX_PRICE || volume < MIN_VOLUME) continue;
+    tickersPassed.push(symbol);
 
     const confidence = getConfidence(candles);
     if (confidence < CONFIDENCE_THRESHOLD) continue;
@@ -123,6 +141,7 @@ async function scanMarket() {
     const sl = +(entry - 1.3 * atr).toFixed(2);
 
     sendAlert({ symbol, entry, tp, sl, confidence });
+    alertsFired += 1;
   }
 }
 
@@ -140,6 +159,19 @@ app.get("/scan", async (_, res) => {
 app.get("/mock-alert", (_, res) => {
   sendAlert({ symbol: "TEST", entry: 1.23, tp: 1.50, sl: 1.10, confidence: 77 });
   res.json({ status: "Mock alert sent" });
+});
+
+// === NEW: Status Route ===
+app.get("/status", (_, res) => {
+  res.json({
+    lastScan: lastScanTime || "Not yet scanned",
+    tickersScraped: tickersScanned.length,
+    tickersPassedFilters: tickersPassed.length,
+    apiCallsUsed,
+    tickersScanned,
+    tickersPassed,
+    alertsFired
+  });
 });
 
 const PORT = process.env.PORT || 3000;
