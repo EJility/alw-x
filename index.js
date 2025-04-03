@@ -186,6 +186,7 @@ async function scanMarket() {
   systemStatus.lastScan = now.toLocaleTimeString();
 }
 
+// Start scanning every minute
 setInterval(scanMarket, SCAN_INTERVAL);
 
 app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
