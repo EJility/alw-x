@@ -142,13 +142,15 @@ function sendAlert({ symbol, entry, tp, sl, confidence }) {
 }
 
 async function scanMarket() {
+  console.log("[SCAN] Starting market scan...");
   const now = new Date();
   const hour = now.getHours();
   const min = now.getMinutes();
-  let alerts = 0;
-  let apiCallsBefore = systemStatus.apiCallsUsed;
 
-  if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) return;
+  if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) {
+    console.log(`[SCAN] Skipped due to time window: ${hour}:${min}`);
+    return;
+  }
 
   const allTickers = await fetchTopStocksFromFinviz();
   systemStatus.tickersScraped = allTickers.length;
@@ -187,29 +189,33 @@ async function scanMarket() {
       if (!passed5Min) continue;
 
       sendAlert({ symbol, entry, tp, sl, confidence });
-      alerts++;
     }
   }
 
   systemStatus.lastScan = now.toLocaleTimeString();
-  systemStatus.alertsFired += alerts;
-  systemStatus.apiCallsUsed += systemStatus.apiCallsUsed - apiCallsBefore;
 }
 
 setInterval(scanMarket, SCAN_INTERVAL);
 
 app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
 app.get("/status", (_, res) => res.json(systemStatus));
+
 app.get("/manual", async (_, res) => {
-  await scanMarket();
-  res.json({ status: "Manual scan complete" });
+  console.log("[MANUAL] Scan triggered manually");
+  try {
+    await scanMarket();
+    res.json({ status: "Manual scan complete" });
+  } catch (err) {
+    console.error("[MANUAL ERROR]", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
+
 app.get("/mock-alert", (_, res) => {
   sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.5, sl: 1.1, confidence: 88 });
   res.json({ status: "Mock alert triggered" });
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`ALW-X Sentinel v4.8.1 Diagnostic running on port ${PORT}`);
+app.listen(process.env.PORT || 10000, () => {
+  console.log("ALW-X Sentinel v4.8.1 Diagnostic running on port 10000");
 });
