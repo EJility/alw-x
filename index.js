@@ -124,7 +124,11 @@ async function passes5MinFilter(symbol) {
 
 function sendAlert({ symbol, entry, tp, sl, confidence }) {
   const msg = {
-    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(2)}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(2)}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
+    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(
+      2
+    )}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(
+      2
+    )}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
   };
 
   axios.post(DISCORD_WEBHOOK, msg)
@@ -141,6 +145,9 @@ async function scanMarket() {
   const now = new Date();
   const hour = now.getHours();
   const min = now.getMinutes();
+  let alerts = 0;
+  let apiCallsBefore = systemStatus.apiCallsUsed;
+
   if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) return;
 
   const allTickers = await fetchTopStocksFromFinviz();
@@ -180,13 +187,15 @@ async function scanMarket() {
       if (!passed5Min) continue;
 
       sendAlert({ symbol, entry, tp, sl, confidence });
+      alerts++;
     }
   }
 
   systemStatus.lastScan = now.toLocaleTimeString();
+  systemStatus.alertsFired += alerts;
+  systemStatus.apiCallsUsed += systemStatus.apiCallsUsed - apiCallsBefore;
 }
 
-// Start scanning every minute
 setInterval(scanMarket, SCAN_INTERVAL);
 
 app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
@@ -196,7 +205,7 @@ app.get("/manual", async (_, res) => {
   res.json({ status: "Manual scan complete" });
 });
 app.get("/mock-alert", (_, res) => {
-  sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.50, sl: 1.10, confidence: 88 });
+  sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.5, sl: 1.1, confidence: 88 });
   res.json({ status: "Mock alert triggered" });
 });
 
