@@ -12,6 +12,14 @@ const MAX_PRICE = 30;
 const MIN_VOLUME = 100000;
 const CONFIDENCE_THRESHOLD = 65;
 
+let systemStatus = {
+  version: "v4.8.1",
+  lastScan: "Not yet scanned",
+  tickersScraped: 0,
+  apiCallsUsed: 0,
+  alertsFired: 0
+};
+
 function chunkArray(array, size) {
   const chunks = [];
   for (let i = 0; i < array.length; i += size) {
@@ -41,6 +49,7 @@ async function fetchBulkCandles(symbols, interval = "1min") {
     const joined = symbols.join(",");
     const url = `https://api.twelvedata.com/time_series?symbol=${joined}&interval=${interval}&outputsize=20&apikey=${TWELVE_DATA_KEY}`;
     const res = await axios.get(url);
+    systemStatus.apiCallsUsed += 1;
     return res.data;
   } catch (err) {
     console.error("Bulk candle fetch error:", err.message);
@@ -52,6 +61,7 @@ async function fetchCandlesSingle(symbol, interval = "5min") {
   try {
     const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=10&apikey=${TWELVE_DATA_KEY}`;
     const res = await axios.get(url);
+    systemStatus.apiCallsUsed += 1;
     return res.data.values ? res.data.values.reverse() : [];
   } catch (err) {
     console.error(`Error fetching ${interval} candles for ${symbol}:`, err.message);
@@ -114,15 +124,12 @@ async function passes5MinFilter(symbol) {
 
 function sendAlert({ symbol, entry, tp, sl, confidence }) {
   const msg = {
-    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(
-      2
-    )}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(
-      2
-    )}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
+    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(2)}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(2)}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
   };
 
   axios.post(DISCORD_WEBHOOK, msg)
     .then(() => {
+      systemStatus.alertsFired += 1;
       console.log(`[ALERT SENT] ${symbol} | Entry: $${entry.toFixed(2)} | Confidence: ${confidence}%`);
     })
     .catch((err) => {
@@ -137,8 +144,9 @@ async function scanMarket() {
   if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) return;
 
   const allTickers = await fetchTopStocksFromFinviz();
-  const finalTickers = [];
+  systemStatus.tickersScraped = allTickers.length;
 
+  const finalTickers = [];
   for (const symbol of allTickers) {
     const candles = await fetchCandlesSingle(symbol, "1min");
     if (!candles.length) continue;
@@ -171,4 +179,27 @@ async function scanMarket() {
       const passed5Min = await passes5MinFilter(symbol);
       if (!passed5Min) continue;
 
-      sendAlert({ symbol,
+      sendAlert({ symbol, entry, tp, sl, confidence });
+    }
+  }
+
+  systemStatus.lastScan = now.toLocaleTimeString();
+}
+
+setInterval(scanMarket, SCAN_INTERVAL);
+
+app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
+app.get("/status", (_, res) => res.json(systemStatus));
+app.get("/manual", async (_, res) => {
+  await scanMarket();
+  res.json({ status: "Manual scan complete" });
+});
+app.get("/mock-alert", (_, res) => {
+  sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.50, sl: 1.10, confidence: 88 });
+  res.json({ status: "Mock alert triggered" });
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`ALW-X Sentinel v4.8.1 Diagnostic running on port ${PORT}`);
+});
