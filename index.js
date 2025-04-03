@@ -124,11 +124,7 @@ async function passes5MinFilter(symbol) {
 
 function sendAlert({ symbol, entry, tp, sl, confidence }) {
   const msg = {
-    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(
-      2
-    )}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(
-      2
-    )}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
+    content: `**ALW-X Alert (v4.8.1)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(2)}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(2)}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
   };
 
   axios.post(DISCORD_WEBHOOK, msg)
@@ -195,8 +191,6 @@ async function scanMarket() {
   systemStatus.lastScan = now.toLocaleTimeString();
 }
 
-setInterval(scanMarket, SCAN_INTERVAL);
-
 app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
 app.get("/status", (_, res) => res.json(systemStatus));
 
@@ -215,6 +209,13 @@ app.get("/mock-alert", (_, res) => {
   sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.5, sl: 1.1, confidence: 88 });
   res.json({ status: "Mock alert triggered" });
 });
+
+// NEW FIX: Warm-up trigger to start scanning on live boot
+setTimeout(() => {
+  console.log("[STARTUP] Initial scan triggered after warm-up delay.");
+  scanMarket(); // optional first scan
+  setInterval(scanMarket, SCAN_INTERVAL);
+}, 5000); // wait 5 seconds to let Render boot everything
 
 app.listen(process.env.PORT || 10000, () => {
   console.log("ALW-X Sentinel v4.8.1 Diagnostic running on port 10000");
