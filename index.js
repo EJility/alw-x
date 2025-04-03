@@ -138,10 +138,11 @@ function sendAlert({ symbol, entry, tp, sl, confidence }) {
 }
 
 async function scanMarket() {
-  console.log("[SCAN] Starting market scan...");
-  const now = new Date();
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
   const hour = now.getHours();
   const min = now.getMinutes();
+
+  console.log(`[SCAN] Starting market scan at ${hour}:${min} PT`);
 
   if (hour < 9 || (hour === 9 && min < 15) || (hour === 10 && min > 30) || hour > 10) {
     console.log(`[SCAN] Skipped due to time window: ${hour}:${min}`);
@@ -188,12 +189,12 @@ async function scanMarket() {
     }
   }
 
-  systemStatus.lastScan = now.toLocaleTimeString();
+  systemStatus.lastScan = now.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles" });
 }
 
+// ROUTES
 app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.1 is running."));
 app.get("/status", (_, res) => res.json(systemStatus));
-
 app.get("/manual", async (_, res) => {
   console.log("[MANUAL] Scan triggered manually");
   try {
@@ -204,19 +205,19 @@ app.get("/manual", async (_, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 app.get("/mock-alert", (_, res) => {
   sendAlert({ symbol: "MOCK", entry: 1.23, tp: 1.5, sl: 1.1, confidence: 88 });
   res.json({ status: "Mock alert triggered" });
 });
 
-// NEW FIX: Warm-up trigger to start scanning on live boot
+// WARM-UP SCAN + INTERVAL
 setTimeout(() => {
   console.log("[STARTUP] Initial scan triggered after warm-up delay.");
-  scanMarket(); // optional first scan
+  scanMarket();
   setInterval(scanMarket, SCAN_INTERVAL);
-}, 5000); // wait 5 seconds to let Render boot everything
+}, 5000);
 
+// LISTEN
 app.listen(process.env.PORT || 10000, () => {
   console.log("ALW-X Sentinel v4.8.1 Diagnostic running on port 10000");
 });
