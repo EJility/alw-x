@@ -1,17 +1,25 @@
 const axios = require("axios");
 
-// ✅ Manual Google Sheet for tickers
+// ✅ Configuration
 const SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQa04Eq_TGL-rZQGJ1dwdXxVDiE1hudo21PNOSBLa2JjQSy0X6Qhugkcy8-Z6oO_jtXGp2HI5LnWXMS/pub?gid=0&single=true&output=csv";
-
-// ✅ Discord webhook hardcoded
-const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
-
-// ✅ Your Twelve Data API key via Render
+const DISCORD_WEBHOOK_URL =
+  "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
+const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-// Helper function to pause between batches
-const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+function isWithinTradingWindow() {
+  const now = new Date();
+  const ptTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const hours = ptTime.getHours();
+  const minutes = ptTime.getMinutes();
+  const totalMinutes = hours * 60 + minutes;
+  return totalMinutes >= 555 && totalMinutes <= 630; // 9:15 AM to 10:30 AM PT
+}
+
+function delay(ms) {
+  return new Promise((res) => setTimeout(res, ms));
+}
 
 async function fetchTickersFromSheet() {
   try {
@@ -55,7 +63,6 @@ function calculateConfidence(oneMinCandles) {
     const [latest, prev, prev2] = oneMinCandles;
     const change =
       ((parseFloat(latest.close) - parseFloat(prev.close)) / parseFloat(prev.close)) * 100;
-
     const avgVolume = (parseFloat(prev.volume) + parseFloat(prev2.volume)) / 2;
     const spike = parseFloat(latest.volume) > avgVolume;
 
@@ -74,7 +81,7 @@ async function sendAlertToDiscord({ ticker, entry, stopLoss, takeProfit, confide
 • Entry: $${entry}
 • Stop Loss: $${stopLoss}
 • Take Profit: $${takeProfit}
-• Confidence: ${confidence}%`
+• Confidence: ${confidence}%`,
   };
 
   try {
@@ -116,6 +123,11 @@ async function scanBatch(tickers) {
 }
 
 async function scanAll() {
+  if (!isWithinTradingWindow()) {
+    console.log("⏸️ Outside of trading window. Skipping scan.");
+    return;
+  }
+
   const allTickers = await fetchTickersFromSheet();
   console.log(`📊 Starting batch scan of ${allTickers.length} tickers`);
 
@@ -129,11 +141,13 @@ async function scanAll() {
     await scanBatch(batches[i]);
     if (i < batches.length - 1) {
       console.log("⏱️ Waiting 60s before next batch to avoid API limit...");
-      await delay(60000); // wait 60 seconds between batches
+      await delay(60000); // wait 60s
     }
   }
 
   console.log("✅ All batches completed.");
 }
 
-scanAll();
+// 🔁 Loop every 5 minutes
+setInterval(scanAll, SCAN_INTERVAL_MS);
+scanAll(); // Run immediately on start
