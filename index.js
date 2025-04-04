@@ -1,172 +1,112 @@
-const express = require("express");
 const axios = require("axios");
-const app = express();
+const { sendAlertToDiscord } = require("./discord");
 
-const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
-const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY;
-const SHEET_CSV_URL = process.env.SHEET_CSV_URL;
+// ✅ Your manual Google Sheet CSV
+const SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQa04Eq_TGL-rZQGJ1dwdXxVDiE1hudo21PNOSBLa2JjQSy0X6Qhugkcy8-Z6oO_jtXGp2HI5LnWXMS/pub?gid=0&single=true&output=csv";
 
-const SCAN_INTERVAL = 60000;
-const MIN_PRICE = 0.3;
-const MAX_PRICE = 30;
-const MIN_VOLUME = 100000;
-const CONFIDENCE_THRESHOLD = 65;
+const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-let systemStatus = {
-  version: "v4.8.2",
-  lastScan: "Not yet scanned",
-  tickersChecked: 0,
-  apiCallsUsed: 0,
-  alertsFired: 0
-};
-
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
-  return chunks;
-}
-
-async function fetchCSVTickers() {
+async function fetchTickersFromSheet() {
   try {
-    const res = await axios.get(SHEET_CSV_URL);
-    const rows = res.data.split("\n").map(line => line.trim().split(",")[0]);
-    const cleaned = rows.filter(t => /^[A-Z]+$/.test(t)).slice(0, 20);
-    return cleaned;
-  } catch (err) {
-    console.error("CSV Fetch Error:", err.message);
+    const response = await axios.get(SHEET_URL);
+    const lines = response.data.split("\n");
+    const tickers = lines.map((line) => line.trim()).filter((t) => t.length > 0);
+    return tickers.slice(0, 20); // limit to 20 tickers per scan
+  } catch (error) {
+    console.error("❌ Error fetching ticker sheet:", error.message);
     return [];
   }
 }
 
-async function fetchBulkCandles(symbols, interval = "1min") {
+async function fetchCandleData(ticker, interval = "1min", count = 5) {
   try {
-    const joined = symbols.join(",");
-    const url = `https://api.twelvedata.com/time_series?symbol=${joined}&interval=${interval}&outputsize=20&apikey=${TWELVE_DATA_KEY}`;
-    const res = await axios.get(url);
-    systemStatus.apiCallsUsed += 1;
-    return res.data;
+    const url = `https://api.twelvedata.com/time_series?symbol=${ticker}&interval=${interval}&outputsize=${count}&apikey=${TWELVE_DATA_API_KEY}`;
+    const response = await axios.get(url);
+    if (response.data.status === "error") throw new Error(response.data.message);
+    return response.data.values;
   } catch (err) {
-    console.error("Bulk candle fetch error:", err.message);
-    return {};
+    console.error(`❌ Error fetching ${interval} data for ${ticker}:`, err.message);
+    return null;
   }
 }
 
-async function fetch5MinCandles(symbol) {
-  try {
-    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=5min&outputsize=10&apikey=${TWELVE_DATA_KEY}`;
-    const res = await axios.get(url);
-    systemStatus.apiCallsUsed += 1;
-    return res.data.values ? res.data.values.reverse() : [];
-  } catch (err) {
-    console.error(`5min candle error for ${symbol}:`, err.message);
-    return [];
-  }
-}
-
-function isConfirmationCandle(candles) {
-  const [prev, latest] = candles.slice(-2);
-  return latest && prev &&
-    parseFloat(latest.close) > parseFloat(latest.open) &&
-    parseFloat(latest.close) > parseFloat(prev.high);
-}
-
-function isVolumeSpike(candles) {
-  const vols = candles.slice(-6, -1).map(c => parseFloat(c.volume));
-  const avgVol = vols.reduce((a, b) => a + b, 0) / vols.length;
-  return parseFloat(candles.at(-1).volume) > 1.3 * avgVol;
-}
-
-function getConfidence(candles) {
-  let score = 0;
-  if (isConfirmationCandle(candles)) score += 30;
-  if (isVolumeSpike(candles)) score += 25;
-  const latest = candles.at(-1);
-  const prev = candles.at(-2);
-  if (parseFloat(latest.low) > parseFloat(prev.low)) score += 10;
-  if (parseFloat(latest.close) > parseFloat(latest.open)) score += 10;
-  return score;
-}
-
-function calculateATR(candles, period = 5) {
-  const trs = [];
-  for (let i = 1; i < candles.length; i++) {
+function calculateATR(candles) {
+  let total = 0;
+  for (let i = 0; i < candles.length; i++) {
     const high = parseFloat(candles[i].high);
     const low = parseFloat(candles[i].low);
-    const prevClose = parseFloat(candles[i - 1].close);
-    trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+    total += high - low;
   }
-  return +(trs.slice(-period).reduce((a, b) => a + b, 0) / period).toFixed(4) || 0.05;
+  return total / candles.length;
 }
 
-async function passes5MinFilter(symbol) {
-  const candles = await fetch5MinCandles(symbol);
-  return candles.length >= 2 && isConfirmationCandle(candles);
+function roundToClean(value) {
+  const num = parseFloat(value);
+  if (num < 1) return num.toFixed(4);
+  if (num < 10) return num.toFixed(3);
+  return num.toFixed(2);
 }
 
-function sendAlert({ symbol, entry, tp, sl, confidence }) {
-  const msg = {
-    content: `**ALW-X Alert (v4.8.2)**\n**Ticker:** ${symbol}\n**Entry:** $${entry.toFixed(2)}\n**TP:** $${tp.toFixed(2)}\n**SL:** $${sl.toFixed(2)}\n**Confidence:** ${confidence}%\n**Allocation:** 100%`
-  };
-  axios.post(DISCORD_WEBHOOK, msg)
-    .then(() => {
-      systemStatus.alertsFired += 1;
-      console.log(`[ALERT] ${symbol} | Confidence: ${confidence}%`);
-    })
-    .catch(err => console.error(`[ALERT ERROR] ${symbol}:`, err.message));
-}
+function calculateConfidence(oneMinCandles) {
+  try {
+    const latest = oneMinCandles[0];
+    const prev = oneMinCandles[1];
+    const latestClose = parseFloat(latest.close);
+    const prevClose = parseFloat(prev.close);
+    const change = ((latestClose - prevClose) / prevClose) * 100;
 
-async function scanMarket() {
-  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
-  const h = now.getHours(), m = now.getMinutes();
-  if (h < 9 || (h === 9 && m < 15) || (h === 10 && m > 30) || h > 10) return;
+    const avgVolume =
+      (parseFloat(oneMinCandles[1].volume) + parseFloat(oneMinCandles[2].volume)) / 2;
+    const spike = parseFloat(latest.volume) > avgVolume;
 
-  const tickers = await fetchCSVTickers();
-  systemStatus.tickersChecked = tickers.length;
-
-  const chunks = chunkArray(tickers, 8);
-  for (const group of chunks) {
-    const bulk = await fetchBulkCandles(group);
-    for (const symbol of group) {
-      const data = bulk[symbol];
-      if (!data || !data.values) continue;
-      const candles = data.values.reverse();
-      if (candles.length < 6) continue;
-
-      const confidence = getConfidence(candles);
-      if (confidence < CONFIDENCE_THRESHOLD) continue;
-
-      const entry = parseFloat(candles.at(-1).close);
-      const atr = calculateATR(candles);
-      const tp = +(entry + 1.8 * atr).toFixed(2);
-      const sl = +(entry - 1.3 * atr).toFixed(2);
-
-      const passed5Min = await passes5MinFilter(symbol);
-      if (!passed5Min) continue;
-
-      sendAlert({ symbol, entry, tp, sl, confidence });
-    }
+    let score = 50;
+    if (change > 0.3) score += 10;
+    if (spike) score += 15;
+    return Math.min(score, 100);
+  } catch (e) {
+    return 0;
   }
-
-  systemStatus.lastScan = now.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles" });
 }
 
-app.get("/", (_, res) => res.send("ALW-X Sentinel v4.8.2 is live."));
-app.get("/status", (_, res) => res.json(systemStatus));
-app.get("/manual", async (_, res) => {
-  await scanMarket();
-  res.json({ message: "Manual scan complete" });
-});
-app.get("/mock-alert", (_, res) => {
-  sendAlert({ symbol: "MOCK", entry: 1.11, tp: 1.33, sl: 0.99, confidence: 91 });
-  res.json({ message: "Mock alert sent" });
-});
+async function scan() {
+  const tickers = await fetchTickersFromSheet();
+  console.log(`📈 Scanning ${tickers.length} tickers...`);
 
-setTimeout(() => {
-  console.log("[INIT] Starting scan loop after warmup.");
-  scanMarket();
-  setInterval(scanMarket, SCAN_INTERVAL);
-}, 5000);
+  for (const ticker of tickers) {
+    const oneMinData = await fetchCandleData(ticker, "1min", 5);
+    const fiveMinData = await fetchCandleData(ticker, "5min", 3);
 
-app.listen(process.env.PORT || 10000, () => {
-  console.log("ALW-X Sentinel v4.8.2 server running.");
-});
+    if (!oneMinData || !fiveMinData) continue;
+
+    // 1-min logic
+    const confidence = calculateConfidence(oneMinData);
+    if (confidence < 65) continue;
+
+    // 5-min confirmation candle must be green
+    const last5Min = fiveMinData[0];
+    const fiveMinGreen =
+      parseFloat(last5Min.close) > parseFloat(last5Min.open);
+    if (!fiveMinGreen) continue;
+
+    // ATR-based stop-loss and take-profit
+    const atr = calculateATR(oneMinData);
+    const entry = parseFloat(oneMinData[0].close);
+    const stopLoss = roundToClean(entry - atr * 1.3);
+    const takeProfit = roundToClean(entry + atr * 2.0);
+
+    // Send alert to Discord
+    await sendAlertToDiscord({
+      ticker,
+      entry: roundToClean(entry),
+      stopLoss,
+      takeProfit,
+      confidence,
+    });
+
+    console.log(`✅ Alert sent for ${ticker} (Confidence: ${confidence}%)`);
+  }
+}
+
+scan();
