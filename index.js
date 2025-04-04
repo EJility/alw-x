@@ -1,19 +1,20 @@
 const axios = require("axios");
-const { sendAlertToDiscord } = require("./discord");
 
-// ✅ Your manual Google Sheet CSV
+// ✅ Manual ticker sheet (from Google Sheets CSV)
 const SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQa04Eq_TGL-rZQGJ1dwdXxVDiE1hudo21PNOSBLa2JjQSy0X6Qhugkcy8-Z6oO_jtXGp2HI5LnWXMS/pub?gid=0&single=true&output=csv";
 
+// ✅ Hardcoded Discord webhook
+const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
+
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 async function fetchTickersFromSheet() {
   try {
     const response = await axios.get(SHEET_URL);
     const lines = response.data.split("\n");
     const tickers = lines.map((line) => line.trim()).filter((t) => t.length > 0);
-    return tickers.slice(0, 20); // limit to 20 tickers per scan
+    return tickers.slice(0, 20);
   } catch (error) {
     console.error("❌ Error fetching ticker sheet:", error.message);
     return [];
@@ -70,6 +71,22 @@ function calculateConfidence(oneMinCandles) {
   }
 }
 
+async function sendAlertToDiscord({ ticker, entry, stopLoss, takeProfit, confidence }) {
+  const message = {
+    content: `📈 **ALW-X Alert: ${ticker}**
+• Entry: $${entry}
+• Stop Loss: $${stopLoss}
+• Take Profit: $${takeProfit}
+• Confidence: ${confidence}%`
+  };
+
+  try {
+    await axios.post(DISCORD_WEBHOOK_URL, message);
+  } catch (err) {
+    console.error("❌ Failed to send Discord alert:", err.message);
+  }
+}
+
 async function scan() {
   const tickers = await fetchTickersFromSheet();
   console.log(`📈 Scanning ${tickers.length} tickers...`);
@@ -80,23 +97,19 @@ async function scan() {
 
     if (!oneMinData || !fiveMinData) continue;
 
-    // 1-min logic
     const confidence = calculateConfidence(oneMinData);
     if (confidence < 65) continue;
 
-    // 5-min confirmation candle must be green
     const last5Min = fiveMinData[0];
     const fiveMinGreen =
       parseFloat(last5Min.close) > parseFloat(last5Min.open);
     if (!fiveMinGreen) continue;
 
-    // ATR-based stop-loss and take-profit
     const atr = calculateATR(oneMinData);
     const entry = parseFloat(oneMinData[0].close);
     const stopLoss = roundToClean(entry - atr * 1.3);
     const takeProfit = roundToClean(entry + atr * 2.0);
 
-    // Send alert to Discord
     await sendAlertToDiscord({
       ticker,
       entry: roundToClean(entry),
