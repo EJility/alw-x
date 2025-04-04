@@ -116,4 +116,24 @@ async function scanBatch(tickers) {
 }
 
 async function scanAll() {
-  const allTickers = await fetch
+  const allTickers = await fetchTickersFromSheet();
+  console.log(`📊 Starting batch scan of ${allTickers.length} tickers`);
+
+  const batches = [];
+  for (let i = 0; i < allTickers.length; i += 4) {
+    batches.push(allTickers.slice(i, i + 4));
+  }
+
+  for (let i = 0; i < batches.length; i++) {
+    console.log(`⏳ Running batch ${i + 1}/${batches.length}...`);
+    await scanBatch(batches[i]);
+    if (i < batches.length - 1) {
+      console.log("⏱️ Waiting 60s before next batch to avoid API limit...");
+      await delay(60000); // wait 60 seconds between batches
+    }
+  }
+
+  console.log("✅ All batches completed.");
+}
+
+scanAll();
