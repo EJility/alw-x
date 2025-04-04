@@ -1,20 +1,23 @@
 const axios = require("axios");
 
-// ✅ Manual ticker sheet (from Google Sheets CSV)
+// ✅ Manual Google Sheet for tickers
 const SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQa04Eq_TGL-rZQGJ1dwdXxVDiE1hudo21PNOSBLa2JjQSy0X6Qhugkcy8-Z6oO_jtXGp2HI5LnWXMS/pub?gid=0&single=true&output=csv";
 
-// ✅ Hardcoded Discord webhook
+// ✅ Discord webhook hardcoded
 const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
 
+// ✅ Your Twelve Data API key via Render
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
+
+// Helper function to pause between batches
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function fetchTickersFromSheet() {
   try {
     const response = await axios.get(SHEET_URL);
     const lines = response.data.split("\n");
-    const tickers = lines.map((line) => line.trim()).filter((t) => t.length > 0);
-    return tickers.slice(0, 20);
+    return lines.map((line) => line.trim()).filter((t) => t).slice(0, 20);
   } catch (error) {
     console.error("❌ Error fetching ticker sheet:", error.message);
     return [];
@@ -34,13 +37,10 @@ async function fetchCandleData(ticker, interval = "1min", count = 5) {
 }
 
 function calculateATR(candles) {
-  let total = 0;
-  for (let i = 0; i < candles.length; i++) {
-    const high = parseFloat(candles[i].high);
-    const low = parseFloat(candles[i].low);
-    total += high - low;
-  }
-  return total / candles.length;
+  return (
+    candles.reduce((sum, c) => sum + (parseFloat(c.high) - parseFloat(c.low)), 0) /
+    candles.length
+  );
 }
 
 function roundToClean(value) {
@@ -52,14 +52,11 @@ function roundToClean(value) {
 
 function calculateConfidence(oneMinCandles) {
   try {
-    const latest = oneMinCandles[0];
-    const prev = oneMinCandles[1];
-    const latestClose = parseFloat(latest.close);
-    const prevClose = parseFloat(prev.close);
-    const change = ((latestClose - prevClose) / prevClose) * 100;
+    const [latest, prev, prev2] = oneMinCandles;
+    const change =
+      ((parseFloat(latest.close) - parseFloat(prev.close)) / parseFloat(prev.close)) * 100;
 
-    const avgVolume =
-      (parseFloat(oneMinCandles[1].volume) + parseFloat(oneMinCandles[2].volume)) / 2;
+    const avgVolume = (parseFloat(prev.volume) + parseFloat(prev2.volume)) / 2;
     const spike = parseFloat(latest.volume) > avgVolume;
 
     let score = 50;
@@ -87,26 +84,22 @@ async function sendAlertToDiscord({ ticker, entry, stopLoss, takeProfit, confide
   }
 }
 
-async function scan() {
-  const tickers = await fetchTickersFromSheet();
-  console.log(`📈 Scanning ${tickers.length} tickers...`);
-
+async function scanBatch(tickers) {
   for (const ticker of tickers) {
-    const oneMinData = await fetchCandleData(ticker, "1min", 5);
-    const fiveMinData = await fetchCandleData(ticker, "5min", 3);
+    const oneMin = await fetchCandleData(ticker, "1min", 5);
+    const fiveMin = await fetchCandleData(ticker, "5min", 3);
 
-    if (!oneMinData || !fiveMinData) continue;
+    if (!oneMin || !fiveMin) continue;
 
-    const confidence = calculateConfidence(oneMinData);
+    const confidence = calculateConfidence(oneMin);
     if (confidence < 65) continue;
 
-    const last5Min = fiveMinData[0];
-    const fiveMinGreen =
-      parseFloat(last5Min.close) > parseFloat(last5Min.open);
+    const last5 = fiveMin[0];
+    const fiveMinGreen = parseFloat(last5.close) > parseFloat(last5.open);
     if (!fiveMinGreen) continue;
 
-    const atr = calculateATR(oneMinData);
-    const entry = parseFloat(oneMinData[0].close);
+    const entry = parseFloat(oneMin[0].close);
+    const atr = calculateATR(oneMin);
     const stopLoss = roundToClean(entry - atr * 1.3);
     const takeProfit = roundToClean(entry + atr * 2.0);
 
@@ -122,4 +115,5 @@ async function scan() {
   }
 }
 
-scan();
+async function scanAll() {
+  const allTickers = await fetch
