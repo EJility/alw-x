@@ -1,9 +1,3 @@
-# Generating updated logic for ALW-X v5.0 based on user-provided index.js
-# This version will include entry/SL/TP zones, a 1–2 minute execution buffer, and a skip rule if price exceeds a threshold
-
-from textwrap import dedent
-
-updated_index_js = dedent("""
 const axios = require("axios");
 
 // ✅ Configuration
@@ -30,7 +24,7 @@ function delay(ms) {
 async function fetchTickersFromSheet() {
   try {
     const response = await axios.get(SHEET_URL);
-    const lines = response.data.split("\\n");
+    const lines = response.data.split("\n");
     return lines.map((line) => line.trim()).filter((t) => t).slice(0, 20);
   } catch (error) {
     console.error("❌ Error fetching ticker sheet:", error.message);
@@ -40,12 +34,12 @@ async function fetchTickersFromSheet() {
 
 async function fetchCandleData(ticker, interval = "1min", count = 5) {
   try {
-    const url = \`https://api.twelvedata.com/time_series?symbol=\${ticker}&interval=\${interval}&outputsize=\${count}&apikey=\${TWELVE_DATA_API_KEY}\`;
+    const url = `https://api.twelvedata.com/time_series?symbol=${ticker}&interval=${interval}&outputsize=${count}&apikey=${TWELVE_DATA_API_KEY}`;
     const response = await axios.get(url);
     if (response.data.status === "error") throw new Error(response.data.message);
     return response.data.values;
   } catch (err) {
-    console.error(\`❌ Error fetching \${interval} data for \${ticker}:\`, err.message);
+    console.error(`❌ Error fetching ${interval} data for ${ticker}:`, err.message);
     return null;
   }
 }
@@ -170,10 +164,3 @@ async function scanAll() {
 
 setInterval(scanAll, SCAN_INTERVAL_MS);
 scanAll();
-""")
-
-# Save to file so user can download if desired
-output_path = Path("/mnt/data/index_v5.0.js")
-output_path.write_text(updated_index_js)
-
-output_path.name
