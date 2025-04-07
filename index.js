@@ -1,3 +1,9 @@
+# Generating updated logic for ALW-X v5.0 based on user-provided index.js
+# This version will include entry/SL/TP zones, a 1–2 minute execution buffer, and a skip rule if price exceeds a threshold
+
+from textwrap import dedent
+
+updated_index_js = dedent("""
 const axios = require("axios");
 
 // ✅ Configuration
@@ -6,7 +12,7 @@ const SHEET_URL =
 const DISCORD_WEBHOOK_URL =
   "https://discord.com/api/webhooks/1356083288099520643/WxzFUsLw0F2nHHD4_eGdF8HmPUO00l4MXwGlsSYTg5bBrdBVLYHvuSVsYYo-3Ze6H8BK";
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
-const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const SCAN_INTERVAL_MS = 5 * 60 * 1000;
 
 function isWithinTradingWindow() {
   const now = new Date();
@@ -24,7 +30,7 @@ function delay(ms) {
 async function fetchTickersFromSheet() {
   try {
     const response = await axios.get(SHEET_URL);
-    const lines = response.data.split("\n");
+    const lines = response.data.split("\\n");
     return lines.map((line) => line.trim()).filter((t) => t).slice(0, 20);
   } catch (error) {
     console.error("❌ Error fetching ticker sheet:", error.message);
@@ -34,12 +40,12 @@ async function fetchTickersFromSheet() {
 
 async function fetchCandleData(ticker, interval = "1min", count = 5) {
   try {
-    const url = `https://api.twelvedata.com/time_series?symbol=${ticker}&interval=${interval}&outputsize=${count}&apikey=${TWELVE_DATA_API_KEY}`;
+    const url = \`https://api.twelvedata.com/time_series?symbol=\${ticker}&interval=\${interval}&outputsize=\${count}&apikey=\${TWELVE_DATA_API_KEY}\`;
     const response = await axios.get(url);
     if (response.data.status === "error") throw new Error(response.data.message);
     return response.data.values;
   } catch (err) {
-    console.error(`❌ Error fetching ${interval} data for ${ticker}:`, err.message);
+    console.error(\`❌ Error fetching \${interval} data for \${ticker}:\`, err.message);
     return null;
   }
 }
@@ -75,13 +81,18 @@ function calculateConfidence(oneMinCandles) {
   }
 }
 
-async function sendAlertToDiscord({ ticker, entry, stopLoss, takeProfit, confidence }) {
+async function sendAlertToDiscord({ ticker, entryLow, entryHigh, slLow, slHigh, tpLow, tpHigh, confidence, invalidationLevel }) {
   const message = {
-    content: `📈 **ALW-X Alert: ${ticker}**
-• Entry: $${entry}
-• Stop Loss: $${stopLoss}
-• Take Profit: $${takeProfit}
-• Confidence: ${confidence}%`,
+    content: `**ALW-X v5.0 Alert | ${ticker} | LONG**
+• Entry Zone: $${entryLow} – $${entryHigh}
+• Stop Loss Zone: $${slLow} – $${slHigh}
+• Take Profit Zone: $${tpLow} – $${tpHigh}
+• Confidence Score: ${confidence}%
+• Valid for next 1–2 minutes
+• Swing Hold: Allowed if SL not hit and structure holds
+• Notes:
+  - Skip if price breaks above $${invalidationLevel} before entry.
+  - Adjust SL depending on actual fill price within entry zone.`
   };
 
   try {
@@ -95,7 +106,6 @@ async function scanBatch(tickers) {
   for (const ticker of tickers) {
     const oneMin = await fetchCandleData(ticker, "1min", 5);
     const fiveMin = await fetchCandleData(ticker, "5min", 3);
-
     if (!oneMin || !fiveMin) continue;
 
     const confidence = calculateConfidence(oneMin);
@@ -105,17 +115,27 @@ async function scanBatch(tickers) {
     const fiveMinGreen = parseFloat(last5.close) > parseFloat(last5.open);
     if (!fiveMinGreen) continue;
 
-    const entry = parseFloat(oneMin[0].close);
+    const entryBase = parseFloat(oneMin[0].close);
     const atr = calculateATR(oneMin);
-    const stopLoss = roundToClean(entry - atr * 1.3);
-    const takeProfit = roundToClean(entry + atr * 2.0);
+
+    const entryLow = roundToClean(entryBase);
+    const entryHigh = roundToClean(entryBase + atr * 0.1);
+    const stopLossLow = roundToClean(entryBase - atr * 1.5);
+    const stopLossHigh = roundToClean(entryBase - atr * 1.2);
+    const takeProfitLow = roundToClean(entryBase + atr * 2.5);
+    const takeProfitHigh = roundToClean(entryBase + atr * 4.0);
+    const invalidationLevel = roundToClean(entryHigh + atr * 0.2);
 
     await sendAlertToDiscord({
       ticker,
-      entry: roundToClean(entry),
-      stopLoss,
-      takeProfit,
+      entryLow,
+      entryHigh,
+      slLow: stopLossLow,
+      slHigh: stopLossHigh,
+      tpLow: takeProfitLow,
+      tpHigh: takeProfitHigh,
       confidence,
+      invalidationLevel,
     });
 
     console.log(`✅ Alert sent for ${ticker} (Confidence: ${confidence}%)`);
@@ -141,13 +161,19 @@ async function scanAll() {
     await scanBatch(batches[i]);
     if (i < batches.length - 1) {
       console.log("⏱️ Waiting 60s before next batch to avoid API limit...");
-      await delay(60000); // wait 60s
+      await delay(60000);
     }
   }
 
   console.log("✅ All batches completed.");
 }
 
-// 🔁 Loop every 5 minutes
 setInterval(scanAll, SCAN_INTERVAL_MS);
-scanAll(); // Run immediately on start
+scanAll();
+""")
+
+# Save to file so user can download if desired
+output_path = Path("/mnt/data/index_v5.0.js")
+output_path.write_text(updated_index_js)
+
+output_path.name
